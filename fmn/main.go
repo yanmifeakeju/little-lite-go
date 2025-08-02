@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 )
 
 type command struct {
@@ -17,9 +16,6 @@ type command struct {
 	force       bool
 	interactive bool
 	verbose     bool
-
-	// List options
-	sortFiles bool
 }
 
 func main() {
@@ -30,8 +26,6 @@ func main() {
 	interactive := flag.Bool("i", false, "Prompt before overwrite")
 	verbose := flag.Bool("v", false, "Log all copies")
 
-	// List options
-	sortFiles := flag.Bool("sort", false, "Sort files")
 	flag.Parse()
 
 	cmd := command{
@@ -40,7 +34,6 @@ func main() {
 		force:       *force,
 		interactive: *interactive,
 		verbose:     *verbose,
-		sortFiles:   *sortFiles,
 	}
 
 	// Use remaining args as directories to list
@@ -73,7 +66,7 @@ func run(cmd command, directories []string, out io.Writer) error {
 	return listFiles(cmd, directories, out)
 }
 
-func listFiles(cmd command, directories []string, out io.Writer) error {
+func listFiles(_ command, directories []string, out io.Writer) error {
 	needsBlankLine := true // track printing lines between directories
 	for i, path := range directories {
 		if i > 0 && needsBlankLine {
@@ -99,12 +92,6 @@ func listFiles(cmd command, directories []string, out io.Writer) error {
 		if err != nil {
 			fmt.Fprintf(out, "Error reading %s: %v\n", path, err)
 			continue
-		}
-
-		if cmd.sortFiles {
-			sort.Slice(files, func(i, j int) bool {
-				return files[i].Name() < files[j].Name()
-			})
 		}
 
 		for _, f := range files {

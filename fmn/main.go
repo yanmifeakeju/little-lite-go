@@ -43,7 +43,7 @@ func main() {
 		verbose:     *verbose,
 	}
 
-	// Use remaining args as directories to list
+	// Get remaining args as paths to process (files or directories)
 	dirs := flag.Args()
 
 	if len(dirs) == 0 {
@@ -56,14 +56,13 @@ func main() {
 }
 
 func run(cmd command, directories []string, out io.Writer) error {
-	// copy mode
 	if cmd.copy {
-		if directories[0] == "." {
-			return errors.New("cannot copy '.' to itself")
+		if len(directories) == 1 {
+			directories = append(directories, ".") // Add default destination
 		}
 
-		if len(directories) == 1 {
-			directories = append(directories, ".")
+		if directories[0] == directories[len(directories)-1] {
+			return errors.New("cannot copy a path to itself") // Quick catch for . . or file to file
 		}
 
 		return copyFile(cmd, directories, out)
@@ -154,6 +153,10 @@ func copyFile(cmd command, directories []string, out io.Writer) error {
 	// Pre-validate and collect source info
 	srcInfos := make([]os.FileInfo, len(sources))
 	for i, src := range sources {
+		if src == dest {
+			return fmt.Errorf("cannot copy '%s' to itself", src)
+		}
+
 		srcInfo, err := os.Stat(src)
 		if err != nil {
 			return fmt.Errorf("cannot stat '%s': %w", src, err)

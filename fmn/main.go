@@ -14,6 +14,8 @@ import (
 // Can be overridden in tests
 var errorLogger = log.New(os.Stderr, "fmn: ", 0)
 
+// command holds the configuration flags for the file management operations.
+// It contains options for both copy and list operations.
 type command struct {
 	// Copy options
 	copy        bool

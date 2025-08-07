@@ -296,7 +296,152 @@ func TestListFileErrors(t *testing.T) {
 	})
 }
 
-func TestCopyFile(t *testing.T) {}
+func TestCopyFile(t *testing.T) {
+
+	t.Run("SingleFile", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true}
+
+		// Create a source file with known content
+		srcFiles := []testFile{{path: "file1.txt", content: "test content", mode: 0644}}
+		srcDir := setupTestDirWithFiles(t, srcFiles)
+		srcFilePath := filepath.Join(srcDir, "file1.txt")
+
+		destDir := t.TempDir()
+
+		// [source1, source2, ..., destination]
+		directories := []string{srcFilePath, destDir}
+
+		if err := copyFile(cmd, directories, &buf); err != nil {
+			t.Fatal(err)
+		}
+
+		expectedDestFile := filepath.Join(destDir, "file1.txt")
+
+		// Check the copied file exist in the destination directory
+		if _, err := os.Stat(expectedDestFile); os.IsNotExist(err) {
+			t.Fatalf("file was not copied to destination directory: %s", expectedDestFile)
+		}
+
+		// Check content
+		copiedContent, err := os.ReadFile(expectedDestFile)
+		if err != nil {
+			t.Fatalf("failed to read copied file: %v", err)
+		}
+
+		expectedContent := "test content"
+		if string(copiedContent) != expectedContent {
+			t.Errorf("copied content mismatch: expected %q, got %q", expectedContent, string(copiedContent))
+		}
+
+		// Check if permissions are preserved
+		srcInfo, err := os.Stat(srcFilePath)
+		if err != nil {
+			t.Fatalf("failed to stat source file: %v", err)
+		}
+
+		destInfo, err := os.Stat(expectedDestFile)
+		if err != nil {
+			t.Fatalf("failed to stat destination file: %v", err)
+		}
+
+		srcMode := srcInfo.Mode().Perm()
+		destMode := destInfo.Mode().Perm()
+
+		if srcMode != destMode {
+			t.Errorf("permissions not preserved: source %o, destination %o", srcMode, destMode)
+		}
+
+		// Check if modification times are preserved
+		srcModTime := srcInfo.ModTime()
+		destModTime := destInfo.ModTime()
+
+		// Using Equal() method for time comparison is more reliable than ==
+		if !srcModTime.Equal(destModTime) {
+			t.Errorf("modification times not preserved: source %v, destination %v",
+				srcModTime, destModTime)
+		}
+	})
+
+	t.Run("MultipleFiles", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true}
+
+		// Create  source files with known content
+		srcFiles := []testFile{
+			{path: "file1.txt", content: "content of file1", mode: 0644},
+			{path: "file2.txt", content: "content of file2", mode: 0644},
+			{path: "file3.txt", content: "content of file3", mode: 0644},
+			{path: "file4.txt", content: "content of file4", mode: 0644},
+		}
+		srcDir := setupTestDirWithFiles(t, srcFiles)
+
+		// [source1, source2, ..., destination]
+		directories := make([]string, len(srcFiles))
+		for i, files := range srcFiles {
+			directories[i] = filepath.Join(srcDir, files.path)
+		}
+
+		destDir := t.TempDir()
+
+		directories = append(directories, destDir)
+
+		if err := copyFile(cmd, directories, &buf); err != nil {
+			t.Fatal(err)
+		}
+
+		for i, f := range srcFiles {
+			expectedDestFile := filepath.Join(destDir, f.path)
+
+			// Check the copied file exist in the destination directory
+			if _, err := os.Stat(expectedDestFile); os.IsNotExist(err) {
+				t.Fatalf("file was not copied to destination directory: %s", expectedDestFile)
+			}
+
+			// Check content
+			copiedContent, err := os.ReadFile(expectedDestFile)
+			if err != nil {
+				t.Fatalf("failed to read copied file: %v", err)
+			}
+
+			expectedContent := f.content
+			if string(copiedContent) != expectedContent {
+				t.Errorf("copied content mismatch: expected %q, got %q", expectedContent, string(copiedContent))
+			}
+
+			// Check if permissions are preserved
+			srcInfo, err := os.Stat(directories[i])
+			if err != nil {
+				t.Fatalf("failed to stat source file: %v", err)
+			}
+
+			destInfo, err := os.Stat(expectedDestFile)
+			if err != nil {
+				t.Fatalf("failed to stat destination file: %v", err)
+			}
+
+			srcMode := srcInfo.Mode().Perm()
+			destMode := destInfo.Mode().Perm()
+
+			if srcMode != destMode {
+				t.Errorf("permissions not preserved: source %o, destination %o", srcMode, destMode)
+			}
+
+			// Check if modification times are preserve
+			srcModTime := srcInfo.ModTime()
+			destModTime := destInfo.ModTime()
+
+			if !srcModTime.Equal(destModTime) {
+				t.Errorf("modification times not preserved for %s: source %v, destination %v",
+					f.path, srcModTime, destModTime)
+			}
+		}
+
+	})
+
+	// t.Run("RecursiveDirectory", func(t *testing.T) { ... })
+	// t.Run("ErrorCases", func(t *testing.T) { ... })
+}
 
 type testFile struct {
 	path    string

@@ -45,10 +45,10 @@ func TestListFile(t *testing.T) {
 				// Create test Files
 				files := make([]testFile, tc.fileCount)
 				for i := 0; i < tc.fileCount; i++ {
-					files[i] = testFile{path: fmt.Sprintf("file%d.txt", i+1), content: "", mode: 0}
+					files[i] = testFile{filename: fmt.Sprintf("file%d.txt", i+1), content: "test content", mode: 0}
 				}
 
-				dir := setupTestDirWithFiles(t, files)
+				dir, _ := setupTestDirWithFiles(t, files)
 				dirs = append(dirs, dir)
 			}
 
@@ -147,10 +147,10 @@ func TestListFileMixed(t *testing.T) {
 	for len(tDir) < directoryCount {
 		var dir []testFile
 		for i := range fileCount {
-			dir = append(dir, testFile{path: fmt.Sprintf("file%d.txt", i+1), content: "", mode: 0})
+			dir = append(dir, testFile{path: ".", filename: fmt.Sprintf("file%d.txt", i+1), content: "test content", mode: 0})
 		}
 
-		dirName := setupTestDirWithFiles(t, dir)
+		dirName, _ := setupTestDirWithFiles(t, dir)
 		tDir = append(tDir, dirName)
 	}
 
@@ -303,8 +303,8 @@ func TestCopyFile(t *testing.T) {
 		cmd := command{copy: true}
 
 		// Create a source file with known content
-		srcFiles := []testFile{{path: "file1.txt", content: "test content", mode: 0644}}
-		srcDir := setupTestDirWithFiles(t, srcFiles)
+		srcFiles := []testFile{{path: ".", filename: "file1.txt", content: "test content", mode: 0644}}
+		srcDir, _ := setupTestDirWithFiles(t, srcFiles)
 		srcFilePath := filepath.Join(srcDir, "file1.txt")
 
 		destDir := t.TempDir()
@@ -369,21 +369,15 @@ func TestCopyFile(t *testing.T) {
 
 		// Create  source files with known content
 		srcFiles := []testFile{
-			{path: "file1.txt", content: "content of file1", mode: 0644},
-			{path: "file2.txt", content: "content of file2", mode: 0644},
-			{path: "file3.txt", content: "content of file3", mode: 0644},
-			{path: "file4.txt", content: "content of file4", mode: 0644},
+			{path: "", filename: "file1.txt", content: "content of file1", mode: 0644},
+			{path: "", filename: "file2.txt", content: "content of file2", mode: 0644},
+			{path: "", filename: "file3.txt", content: "content of file3", mode: 0644},
+			{path: "", filename: "file4.txt", content: "content of file4", mode: 0644},
 		}
-		srcDir := setupTestDirWithFiles(t, srcFiles)
 
-		// [source1, source2, ..., destination]
-		directories := make([]string, len(srcFiles))
-		for i, files := range srcFiles {
-			directories[i] = filepath.Join(srcDir, files.path)
-		}
+		_, directories := setupTestDirWithFiles(t, srcFiles)
 
 		destDir := t.TempDir()
-
 		directories = append(directories, destDir)
 
 		if err := copyFile(cmd, directories, &buf); err != nil {
@@ -391,7 +385,7 @@ func TestCopyFile(t *testing.T) {
 		}
 
 		for i, f := range srcFiles {
-			expectedDestFile := filepath.Join(destDir, f.path)
+			expectedDestFile := filepath.Join(destDir, f.filename)
 
 			// Check the copied file exist in the destination directory
 			if _, err := os.Stat(expectedDestFile); os.IsNotExist(err) {
@@ -436,39 +430,117 @@ func TestCopyFile(t *testing.T) {
 					f.path, srcModTime, destModTime)
 			}
 		}
-
 	})
 
-	// t.Run("RecursiveDirectory", func(t *testing.T) { ... })
+	t.Run("RecursiveSingleDirectory", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true, recursive: true}
+
+		// Create  source files with known content
+		srcFiles := []testFile{
+			{path: "dir1", filename: "subdir/test1.txt", content: "test content"},
+			{path: "dir1", filename: "subdir2/test2.txt", content: "test content"},
+			{path: "dir1", filename: "text1.txt", content: "test content"},
+		}
+
+		dir, _ := setupTestDirWithFiles(t, srcFiles)
+
+		srcDir := filepath.Join(dir, "dir1")
+		destDir := t.TempDir()
+
+		if err := copyFile(cmd, []string{srcDir, destDir}, &buf); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify each file was copied correctly
+		for _, f := range srcFiles {
+			expectedDestFile := filepath.Join(destDir, f.filename)
+			srcFile := filepath.Join(srcDir, f.filename)
+
+			// Check the copied file exists in the destination directory
+			if _, err := os.Stat(expectedDestFile); os.IsNotExist(err) {
+				t.Fatalf("file was not copied to destination directory: %s", expectedDestFile)
+			}
+
+			// Verify content matches exactly
+			copiedContent, err := os.ReadFile(expectedDestFile)
+			if err != nil {
+				t.Fatalf("failed to read copied file: %v", err)
+			}
+			if string(copiedContent) != f.content {
+				t.Errorf("content mismatch for %s: expected %q, got %q",
+					f.filename, f.content, string(copiedContent))
+			}
+
+			// Check if file permissions are preserved
+			srcInfo, err := os.Stat(srcFile)
+			if err != nil {
+				t.Fatalf("failed to stat source file %s: %v", srcFile, err)
+			}
+
+			destInfo, err := os.Stat(expectedDestFile)
+			if err != nil {
+				t.Fatalf("failed to stat destination file %s: %v", expectedDestFile, err)
+			}
+
+			// Compare file permissions
+			srcMode := srcInfo.Mode().Perm()
+			destMode := destInfo.Mode().Perm()
+			if srcMode != destMode {
+				t.Errorf("permissions not preserved for %s: source %o, destination %o",
+					f.filename, srcMode, destMode)
+			}
+
+			// Check if modification times are preserved
+			srcModTime := srcInfo.ModTime()
+			destModTime := destInfo.ModTime()
+			if !srcModTime.Equal(destModTime) {
+				t.Errorf("modification times not preserved for %s: source %v, destination %v",
+					f.filename, srcModTime, destModTime)
+			}
+
+		}
+
+	})
+	// t.Run("RecursiveMultipleDirectory", func(t *testing.T) {})
 	// t.Run("ErrorCases", func(t *testing.T) { ... })
 }
 
 type testFile struct {
-	path    string
-	content string
-	mode    os.FileMode
+	path     string
+	filename string
+	content  string
+	mode     os.FileMode
 }
 
-func setupTestDirWithFiles(t *testing.T, files []testFile) string {
+func setupTestDirWithFiles(t *testing.T, files []testFile) (string, []string) {
 	t.Helper()
-
 	dir := t.TempDir()
+	paths := []string{}
 
 	for _, f := range files {
-		fullPath := filepath.Join(dir, f.path)
+		if f.filename != "" && f.content != "" {
+			// Creating a file
+			fullPath := filepath.Join(dir, f.path, f.filename)
+			if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
+				t.Fatalf("Failed to create directory for %s: %v", fullPath, err)
+			}
 
-		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-			t.Fatalf("Failed to create directory for %s: %v", fullPath, err)
-		}
-
-		mode := f.mode
-		if mode == 0 {
-			mode = 0644
-		}
-
-		if err := os.WriteFile(fullPath, []byte(f.content), mode); err != nil {
-			t.Fatalf("Failed to create file %s: %v", fullPath, err)
+			mode := f.mode
+			if mode == 0 {
+				mode = 0644
+			}
+			if err := os.WriteFile(fullPath, []byte(f.content), mode); err != nil {
+				t.Fatalf("Failed to create file %s: %v", fullPath, err)
+			}
+			paths = append(paths, fullPath)
+		} else if f.path != "" {
+			// Creating directory only
+			dirPath := filepath.Join(dir, f.path)
+			if err := os.MkdirAll(dirPath, 0755); err != nil {
+				t.Fatalf("Failed to create directory %s: %v", dirPath, err)
+			}
 		}
 	}
-	return dir
+	return dir, paths
 }

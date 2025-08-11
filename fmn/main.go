@@ -10,9 +10,21 @@ import (
 	"path/filepath"
 )
 
+// console provides global access to I/O streams for input, output, and error logging
+// Can be overridden in tests for easier testing
+var console = struct {
+	In  io.Reader
+	Out io.Writer
+	Err io.Writer
+}{
+	In:  os.Stdin,
+	Out: os.Stdout,
+	Err: os.Stderr,
+}
+
 // errorLogger writes error messages to stderr with consistent formatting
 // Can be overridden in tests
-var errorLogger = log.New(os.Stderr, "fmn: ", 0)
+var errorLogger = log.New(console.Err, "fmn: ", 0)
 
 // command holds the configuration flags for the file management operations.
 // It contains options for both copy and list operations.
@@ -23,6 +35,7 @@ type command struct {
 	force       bool
 	interactive bool
 	verbose     bool
+	dryRun      bool
 }
 
 func main() {
@@ -31,7 +44,8 @@ func main() {
 	recursive := flag.Bool("r", false, "Copy files recursively")
 	force := flag.Bool("f", false, "Force overwrite of existing files")
 	interactive := flag.Bool("i", false, "Prompt before overwrite")
-	verbose := flag.Bool("v", false, "Log all copies")
+	verbose := flag.Bool("v", false, "Show ")
+	dryRun := flag.Bool("dry-run", false, "Show what would be copied without actually copying")
 
 	flag.Parse()
 
@@ -41,18 +55,19 @@ func main() {
 		force:       *force,
 		interactive: *interactive,
 		verbose:     *verbose,
+		dryRun:      *dryRun,
 	}
 
 	// Get remaining args as paths to process (files or directories)
 	dirs := flag.Args()
 
-	if err := run(cmd, dirs, os.Stdout); err != nil {
+	if err := run(cmd, dirs); err != nil {
 		flag.Usage()
 		errorLogger.Fatal(err)
 	}
 }
 
-func run(cmd command, directories []string, out io.Writer) error {
+func run(cmd command, directories []string) error {
 	if cmd.copy {
 		if len(directories) == 0 {
 			return errors.New("copiles requires at least one source path")
@@ -62,26 +77,25 @@ func run(cmd command, directories []string, out io.Writer) error {
 			directories = append(directories, ".") // Add default destination
 		}
 
-		fmt.Println(directories)
 		if directories[0] == directories[len(directories)-1] {
 			return errors.New("cannot copy a path to itself") // Quick catch for . . or file to file
 		}
 
-		return copyFile(cmd, directories, out)
+		return copyFile(cmd, directories)
 	}
 
 	if len(directories) == 0 {
 		directories = []string{"."} // Default to current directory
 	}
 
-	return listFiles(cmd, directories, out)
+	return listFiles(cmd, directories)
 }
 
 // listFiles lists the contents of the given directories and files.
 // For directories, it prints the directory name followed by a colon and lists all files.
 // For regular files, it prints the file path directly.
 // Blank lines are printed between different items for readability.
-func listFiles(_ command, directories []string, out io.Writer) error {
+func listFiles(_ command, directories []string) error {
 	// Pre-validate all paths first
 	srcInfos := make([]os.FileInfo, len(directories))
 	for i, src := range directories {
@@ -97,18 +111,18 @@ func listFiles(_ command, directories []string, out io.Writer) error {
 	needsBlankLine := true // track printing lines between directories
 	for i, path := range directories {
 		if i > 0 && needsBlankLine {
-			fmt.Fprintln(out) // Blank line between directories
+			fmt.Fprintln(console.Out) // Blank line between directories
 		}
 
 		info := srcInfos[i]
 
 		if !info.IsDir() {
-			printPath(path, out)
+			printPath(path)
 			needsBlankLine = true // Files should have blank lines after them
 			continue
 		}
 
-		fmt.Fprintf(out, "%s:\n", path)
+		fmt.Fprintf(console.Out, "%s:\n", path)
 
 		files, err := os.ReadDir(path)
 		if err != nil {
@@ -118,7 +132,7 @@ func listFiles(_ command, directories []string, out io.Writer) error {
 		}
 
 		for _, f := range files {
-			printPath(f.Name(), out)
+			printPath(f.Name())
 		}
 
 		needsBlankLine = true // Directories should have blank lines after them
@@ -135,7 +149,7 @@ func listFiles(_ command, directories []string, out io.Writer) error {
 // It supports recursive copying with the -r flag, preserves file permissions and timestamps,
 // and handles same-file detection and directory validation.
 // Errors are reported to stderr and the function returns an error if any copies fail.
-func copyFile(cmd command, directories []string, out io.Writer) error {
+func copyFile(cmd command, directories []string) error {
 	// fmt.Println(directories)
 	lastIndex := len(directories) - 1
 	dest := directories[lastIndex]
@@ -208,13 +222,30 @@ func copyFile(cmd command, directories []string, out io.Writer) error {
 				// Build target path: dest + relative path
 				targetPath := filepath.Join(dest, relPath)
 
+				// Check if target already exists
+				_, err = os.Stat(targetPath)
+				if err == nil {
+					// Target exists - check what to do
+					if !cmd.interactive && !cmd.force {
+						// Neither interactive nor force mode - skip this item
+						errorLogger.Printf("'%s' already exists (use -f to force or -i for interactive)", targetPath)
+						return nil // Skip this file/directory and continue to next
+					} else if cmd.interactive && !cmd.force {
+						// Interactive mode - prompt user
+						if !prompt(targetPath) {
+							return nil // User said no - skip this item
+						}
+					}
+					// If force is enabled, we continue and overwrite
+				}
+
 				if d.IsDir() {
 					// Create directory
-					return os.MkdirAll(targetPath, 0755)
+					return createDir(targetPath, cmd)
 				} else {
 					// It's a file - ensure parent directory exists first
 					parentDir := filepath.Dir(targetPath)
-					if err := os.MkdirAll(parentDir, 0755); err != nil {
+					if err := createDir(parentDir, cmd); err != nil {
 						return err
 					}
 
@@ -225,7 +256,7 @@ func copyFile(cmd command, directories []string, out io.Writer) error {
 					}
 
 					// Copy the file
-					return copySrcToDest(path, targetPath, fileInfo, out, cmd)
+					return copySrcToDest(path, targetPath, fileInfo, cmd)
 				}
 			}); err != nil {
 				errorLogger.Printf("Error copying directory '%s': %v", src, err)
@@ -251,7 +282,7 @@ func copyFile(cmd command, directories []string, out io.Writer) error {
 				}
 			}
 
-			if err := copySrcToDest(srcAbs, finalDest, srcInfo, out, cmd); err != nil {
+			if err := copySrcToDest(srcAbs, finalDest, srcInfo, cmd); err != nil {
 				errorLogger.Printf("%v", err)
 				hasErrors = true
 				continue

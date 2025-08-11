@@ -1,17 +1,24 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
-func printPath(path string, w io.Writer) error {
-	_, err := fmt.Fprintln(w, path)
+func printPath(path string) error {
+	_, err := fmt.Fprintln(console.Out, path)
 	return err
 }
 
-func copySrcToDest(src, dst string, srcInfo os.FileInfo, out io.Writer, cmd command) error {
+func copySrcToDest(src, dst string, srcInfo os.FileInfo, cmd command) error {
+
+	if cmd.dryRun {
+		fmt.Fprintf(console.Out, "would copy '%s' -> '%s'\n", src, dst)
+		return nil
+	}
 
 	srcFile, err := os.Open(src)
 	if err != nil {
@@ -41,12 +48,25 @@ func copySrcToDest(src, dst string, srcInfo os.FileInfo, out io.Writer, cmd comm
 	}
 
 	if cmd.verbose {
-		fmt.Fprintf(out, "'%s' -> '%s'\n", src, dst)
+		fmt.Fprintf(console.Out, "'%s' -> '%s'\n", src, dst)
 	}
 
 	return nil
 }
 
-func prompt() bool {
-	return false
+func createDir(path string, cmd command) error {
+	if cmd.dryRun {
+		fmt.Fprintf(console.Out, "would create directory '%s'\n", path)
+		return nil
+	}
+
+	return os.MkdirAll(path, 0755)
+}
+
+func prompt(dst string) bool {
+	fmt.Fprintf(console.Out, "overwrite '%s'? (y/n): ", dst)
+	scanner := bufio.NewScanner(console.In)
+	scanner.Scan()
+	response := strings.ToLower(strings.TrimSpace(scanner.Text()))
+	return response == "y" || response == "yes"
 }

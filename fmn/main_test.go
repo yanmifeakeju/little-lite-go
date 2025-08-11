@@ -35,6 +35,10 @@ func TestListFile(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			// Save original console and restore after test
+			oldConsole := console
+			defer func() { console = oldConsole }()
+
 			var dirs []string
 			directoryCount := tc.directoryCount
 			if directoryCount == 0 {
@@ -53,9 +57,10 @@ func TestListFile(t *testing.T) {
 			}
 
 			var buf bytes.Buffer
+			console.Out = &buf
 			cmd := command{}
 
-			if err := run(cmd, dirs, &buf); err != nil {
+			if err := run(cmd, dirs); err != nil {
 				t.Fatal(err)
 			}
 
@@ -113,6 +118,10 @@ func TestListFile(t *testing.T) {
 }
 
 func TestListFileSingle(t *testing.T) {
+	// Save original console and restore after test
+	oldConsole := console
+	defer func() { console = oldConsole }()
+
 	// Create a single test file
 	dir := t.TempDir()
 	testFilePath := filepath.Join(dir, "testfile.txt")
@@ -122,10 +131,11 @@ func TestListFileSingle(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
+	console.Out = &buf
 	cmd := command{}
 
 	// Pass the FILE path, not directory
-	if err := run(cmd, []string{testFilePath}, &buf); err != nil {
+	if err := run(cmd, []string{testFilePath}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,6 +148,10 @@ func TestListFileSingle(t *testing.T) {
 }
 
 func TestListFileMixed(t *testing.T) {
+	// Save original console and restore after test
+	oldConsole := console
+	defer func() { console = oldConsole }()
+
 	tDir := []string{}
 	directoryCount := 2
 	fileCount := 2
@@ -163,8 +177,9 @@ func TestListFileMixed(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
+	console.Out = &buf
 	tDir = slices.Insert(tDir, fileIndex, tFile)
-	if err := listFiles(command{}, tDir, &buf); err != nil {
+	if err := listFiles(command{}, tDir); err != nil {
 		t.Fatal(err)
 	}
 
@@ -227,10 +242,9 @@ func TestListFileMixed(t *testing.T) {
 }
 
 func TestListFileErrors(t *testing.T) {
-	var buf bytes.Buffer
 	t.Run("NonExistentFile", func(t *testing.T) {
 
-		err := run(command{}, []string{"no-file-like-this.txt"}, &buf)
+		err := run(command{}, []string{"no-file-like-this.txt"})
 		if err == nil {
 			t.Errorf("expected error but got nil")
 		}
@@ -241,7 +255,9 @@ func TestListFileErrors(t *testing.T) {
 	})
 
 	t.Run("FilePermissonDenied", func(t *testing.T) {
-		// Save original logger and restore after test
+		// Save original console and logger and restore after test
+		oldConsole := console
+		defer func() { console = oldConsole }()
 		oldLogger := errorLogger
 		defer func() { errorLogger = oldLogger }()
 
@@ -272,7 +288,8 @@ func TestListFileErrors(t *testing.T) {
 		defer os.Chmod(subdir, 0755)
 
 		var buf bytes.Buffer
-		err := run(command{}, []string{subdir}, &buf)
+		console.Out = &buf
+		err := run(command{}, []string{subdir})
 		if err == nil {
 			t.Error("expected error due to permission denied")
 		}
@@ -298,7 +315,7 @@ func TestListFileErrors(t *testing.T) {
 func TestCopyFile(t *testing.T) {
 
 	t.Run("SingleFile", func(t *testing.T) {
-		var buf bytes.Buffer
+
 		cmd := command{copy: true}
 
 		// Create a source file with known content
@@ -311,7 +328,7 @@ func TestCopyFile(t *testing.T) {
 		// [source1, source2, ..., destination]
 		directories := []string{srcFilePath, destDir}
 
-		if err := run(cmd, directories, &buf); err != nil {
+		if err := run(cmd, directories); err != nil {
 			t.Fatal(err)
 		}
 
@@ -363,7 +380,6 @@ func TestCopyFile(t *testing.T) {
 	})
 
 	t.Run("MultipleFiles", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true}
 
 		// Create  source files with known content
@@ -379,7 +395,7 @@ func TestCopyFile(t *testing.T) {
 		destDir := t.TempDir()
 		directories = append(directories, destDir)
 
-		if err := run(cmd, directories, &buf); err != nil {
+		if err := run(cmd, directories); err != nil {
 			t.Fatal(err)
 		}
 
@@ -432,7 +448,6 @@ func TestCopyFile(t *testing.T) {
 	})
 
 	t.Run("RecursiveSingleDirectory", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true, recursive: true}
 
 		// Create  source files with known content
@@ -447,7 +462,7 @@ func TestCopyFile(t *testing.T) {
 		srcDir := filepath.Join(dir, "dir1")
 		destDir := t.TempDir()
 
-		if err := run(cmd, []string{srcDir, destDir}, &buf); err != nil {
+		if err := run(cmd, []string{srcDir, destDir}); err != nil {
 			t.Fatal(err)
 		}
 
@@ -502,7 +517,6 @@ func TestCopyFile(t *testing.T) {
 
 	})
 	t.Run("RecursiveMultipleDirectory", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true, recursive: true}
 
 		// Create multiple source directories with nested structure
@@ -533,7 +547,7 @@ func TestCopyFile(t *testing.T) {
 		// Format: [source1, source2, ..., destination]
 		directories := []string{srcDir1, srcDir2, destDir}
 
-		if err := run(cmd, directories, &buf); err != nil {
+		if err := run(cmd, directories); err != nil {
 			t.Fatal(err)
 		}
 
@@ -638,14 +652,13 @@ func TestCopyFile(t *testing.T) {
 func TestCopyFileErrors(t *testing.T) {
 
 	t.Run("NonExistentSourceFile", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true}
 
 		destDir := t.TempDir()
 		nonExistentFile := "/path/that/does/not/exist.txt"
 
 		// Attempt to copy non-existent file
-		err := run(cmd, []string{nonExistentFile, destDir}, &buf)
+		err := run(cmd, []string{nonExistentFile, destDir})
 		if err == nil {
 			t.Error("expected error when copying non-existent file, got nil")
 		}
@@ -658,14 +671,13 @@ func TestCopyFileErrors(t *testing.T) {
 	})
 
 	t.Run("NonExistentSourceDirectory", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true, recursive: true}
 
 		destDir := t.TempDir()
 		nonExistentDir := "/path/that/does/not/exist/"
 
 		// Attempt to copy non-existent directory recursively
-		err := run(cmd, []string{nonExistentDir, destDir}, &buf)
+		err := run(cmd, []string{nonExistentDir, destDir})
 		if err == nil {
 			t.Error("expected error when copying non-existent directory, got nil")
 		}
@@ -677,7 +689,6 @@ func TestCopyFileErrors(t *testing.T) {
 	})
 
 	t.Run("InvalidDestinationPath", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true}
 
 		// Create valid source file
@@ -688,7 +699,7 @@ func TestCopyFileErrors(t *testing.T) {
 		// Use invalid destination (file that cannot be created)
 		invalidDest := "/dev/null/cannot/create/this/path"
 
-		if err := run(cmd, []string{srcFile, invalidDest}, &buf); err == nil {
+		if err := run(cmd, []string{srcFile, invalidDest}); err == nil {
 			t.Fatalf("Expected error")
 		}
 
@@ -703,7 +714,6 @@ func TestCopyFileErrors(t *testing.T) {
 		var errBuf bytes.Buffer
 		errorLogger = log.New(&errBuf, "fmn: ", 0)
 
-		var buf bytes.Buffer
 		cmd := command{copy: true} // Non-recursive
 
 		// Create source directory with files
@@ -714,7 +724,7 @@ func TestCopyFileErrors(t *testing.T) {
 		destDir := t.TempDir()
 
 		// Should fail because trying to copy directory without -r flag
-		err := run(cmd, []string{srcDir, destDir}, &buf)
+		err := run(cmd, []string{srcDir, destDir})
 		if err == nil {
 			t.Error("expected error when copying directory without recursive flag, got nil")
 		}
@@ -738,7 +748,6 @@ func TestCopyFileErrors(t *testing.T) {
 	})
 
 	t.Run("InsufficientPermissions", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true}
 
 		// Create source file
@@ -763,7 +772,7 @@ func TestCopyFileErrors(t *testing.T) {
 
 		// Try to copy file into protected directory
 		destFile := filepath.Join(protectedDir, "protected.txt")
-		err := copyFile(cmd, []string{srcFile, destFile}, &buf)
+		err := copyFile(cmd, []string{srcFile, destFile})
 		if err == nil {
 			t.Error("expected error when copying to protected directory, got nil")
 		}
@@ -776,17 +785,16 @@ func TestCopyFileErrors(t *testing.T) {
 	})
 
 	t.Run("TooFewArguments", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true}
 
 		// Test with only one argument (need at least 2: source + dest)
-		err := run(cmd, []string{"onlyfile"}, &buf)
+		err := run(cmd, []string{"onlyfile"})
 		if err == nil {
 			t.Error("expected error with too few arguments, got nil")
 		}
 
 		// Test with empty arguments
-		err = run(cmd, []string{}, &buf)
+		err = run(cmd, []string{})
 		if err == nil {
 			t.Error("expected error with no arguments, got nil")
 		}
@@ -797,7 +805,6 @@ func TestCopyFileErrors(t *testing.T) {
 	})
 
 	t.Run("CopyFileToItself", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true}
 
 		// Create source file
@@ -806,7 +813,7 @@ func TestCopyFileErrors(t *testing.T) {
 		srcFile := files[0]
 
 		// Try to copy file to itself
-		err := run(cmd, []string{srcFile, srcFile}, &buf)
+		err := run(cmd, []string{srcFile, srcFile})
 		if err == nil {
 			t.Error("expected error when copying file to itself, got nil")
 		}
@@ -819,7 +826,6 @@ func TestCopyFileErrors(t *testing.T) {
 	})
 
 	t.Run("MultipleFilesToNonDirectoryDestination", func(t *testing.T) {
-		var buf bytes.Buffer
 		cmd := command{copy: true}
 
 		// Create multiple source files
@@ -835,7 +841,7 @@ func TestCopyFileErrors(t *testing.T) {
 
 		// Try to copy multiple files to a non-directory destination
 		directories := []string{files[0], files[1], destFile[0]}
-		err := run(cmd, directories, &buf)
+		err := run(cmd, directories)
 		if err == nil {
 			t.Error("expected error when copying multiple files to non-directory destination, got nil")
 		}
@@ -846,6 +852,237 @@ func TestCopyFileErrors(t *testing.T) {
 		}
 	})
 
+}
+
+func TestCopyFileDryRun(t *testing.T) {
+	t.Run("DryRunSingleFile", func(t *testing.T) {
+		// Save original console and restore after test
+		oldConsole := console
+		defer func() { console = oldConsole }()
+
+		cmd := command{copy: true, dryRun: true}
+
+		// Create a source file
+		srcFiles := []testFile{{path: ".", filename: "file1.txt", content: "test content", mode: 0644}}
+		_, files := setupTestDirWithFiles(t, srcFiles)
+		srcFile := files[0]
+
+		destDir := t.TempDir()
+
+		var buf bytes.Buffer
+		console.Out = &buf
+		// Run dry-run copy
+		if err := run(cmd, []string{srcFile, destDir}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Check output shows what would be copied
+		output := buf.String()
+		expectedOutput := fmt.Sprintf("would copy '%s' -> '%s'", srcFile, filepath.Join(destDir, "file1.txt"))
+		if !strings.Contains(output, expectedOutput) {
+			t.Errorf("expected dry-run output %q, got %q", expectedOutput, output)
+		}
+
+		// Verify no actual copying happened
+		destFile := filepath.Join(destDir, "file1.txt")
+		if _, err := os.Stat(destFile); !os.IsNotExist(err) {
+			t.Error("dry-run should not create actual files")
+		}
+	})
+
+	t.Run("DryRunRecursiveDirectory", func(t *testing.T) {
+		// Save original console and restore after test
+		oldConsole := console
+		defer func() { console = oldConsole }()
+
+		cmd := command{copy: true, recursive: true, dryRun: true}
+
+		// Create nested directory structure
+		srcFiles := []testFile{
+			{path: "testdir", filename: "subdir/file1.txt", content: "content1", mode: 0644},
+			{path: "testdir", filename: "file2.txt", content: "content2", mode: 0644},
+		}
+		baseDir, _ := setupTestDirWithFiles(t, srcFiles)
+		srcDir := filepath.Join(baseDir, "testdir")
+
+		destDir := t.TempDir()
+
+		var buf bytes.Buffer
+		console.Out = &buf
+		// Run dry-run recursive copy
+		if err := run(cmd, []string{srcDir, destDir}); err != nil {
+			t.Fatal(err)
+		}
+
+		output := buf.String()
+
+		// Should show directory creation
+		if !strings.Contains(output, "would create directory") {
+			t.Error("expected dry-run to show directory creation")
+		}
+
+		// Should show file copying
+		if !strings.Contains(output, "would copy") {
+			t.Error("expected dry-run to show file copying")
+		}
+
+		// Verify no actual directories or files were created
+		if entries, err := os.ReadDir(destDir); err != nil || len(entries) > 0 {
+			t.Error("dry-run should not create actual directories or files")
+		}
+	})
+}
+
+func TestCopyFileVerbose(t *testing.T) {
+	t.Run("VerboseSingleFile", func(t *testing.T) {
+		// Save original console and restore after test
+		oldConsole := console
+		defer func() { console = oldConsole }()
+
+		cmd := command{copy: true, verbose: true}
+
+		// Create a source file
+		srcFiles := []testFile{{path: ".", filename: "file1.txt", content: "test content", mode: 0644}}
+		_, files := setupTestDirWithFiles(t, srcFiles)
+		srcFile := files[0]
+
+		destDir := t.TempDir()
+
+		var buf bytes.Buffer
+		console.Out = &buf
+		// Run verbose copy
+		if err := run(cmd, []string{srcFile, destDir}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Check output shows copy operation
+		output := buf.String()
+		expectedOutput := fmt.Sprintf("'%s' -> '%s'", srcFile, filepath.Join(destDir, "file1.txt"))
+		if !strings.Contains(output, expectedOutput) {
+			t.Errorf("expected verbose output %q, got %q", expectedOutput, output)
+		}
+
+		// Verify actual copying happened
+		destFile := filepath.Join(destDir, "file1.txt")
+		if _, err := os.Stat(destFile); os.IsNotExist(err) {
+			t.Error("verbose mode should still perform actual copying")
+		}
+	})
+
+	t.Run("VerboseMultipleFiles", func(t *testing.T) {
+		// Save original console and restore after test
+		oldConsole := console
+		defer func() { console = oldConsole }()
+
+		cmd := command{copy: true, verbose: true}
+
+		// Create multiple source files
+		srcFiles := []testFile{
+			{path: ".", filename: "file1.txt", content: "content1", mode: 0644},
+			{path: ".", filename: "file2.txt", content: "content2", mode: 0644},
+		}
+		_, files := setupTestDirWithFiles(t, srcFiles)
+
+		destDir := t.TempDir()
+		directories := []string{files[0], files[1], destDir}
+
+		var buf bytes.Buffer
+		console.Out = &buf
+		// Run verbose copy
+		if err := run(cmd, directories); err != nil {
+			t.Fatal(err)
+		}
+
+		output := buf.String()
+
+		// Should show both copy operations
+		expectedOutput1 := fmt.Sprintf("'%s' -> '%s'", files[0], filepath.Join(destDir, "file1.txt"))
+		expectedOutput2 := fmt.Sprintf("'%s' -> '%s'", files[1], filepath.Join(destDir, "file2.txt"))
+
+		if !strings.Contains(output, expectedOutput1) {
+			t.Errorf("expected verbose output for file1: %q, got %q", expectedOutput1, output)
+		}
+		if !strings.Contains(output, expectedOutput2) {
+			t.Errorf("expected verbose output for file2: %q, got %q", expectedOutput2, output)
+		}
+	})
+
+	t.Run("VerboseRecursiveDirectory", func(t *testing.T) {
+		// Save original console and restore after test
+		oldConsole := console
+		defer func() { console = oldConsole }()
+
+		cmd := command{copy: true, recursive: true, verbose: true}
+
+		// Create nested directory structure
+		srcFiles := []testFile{
+			{path: "testdir", filename: "subdir/file1.txt", content: "content1", mode: 0644},
+			{path: "testdir", filename: "file2.txt", content: "content2", mode: 0644},
+		}
+		baseDir, _ := setupTestDirWithFiles(t, srcFiles)
+		srcDir := filepath.Join(baseDir, "testdir")
+
+		destDir := t.TempDir()
+
+		var buf bytes.Buffer
+		console.Out = &buf
+		// Run verbose recursive copy
+		if err := run(cmd, []string{srcDir, destDir}); err != nil {
+			t.Fatal(err)
+		}
+
+		output := buf.String()
+
+		// Should show all file copy operations
+		if !strings.Contains(output, "file1.txt") {
+			t.Error("expected verbose output to show file1.txt copying")
+		}
+		if !strings.Contains(output, "file2.txt") {
+			t.Error("expected verbose output to show file2.txt copying")
+		}
+
+		// Each line should follow the pattern 'source' -> 'destination'
+		lines := strings.SplitSeq(strings.TrimSpace(output), "\n")
+		for line := range lines {
+			if line != "" && !strings.Contains(line, "' -> '") {
+				t.Errorf("verbose output line should contain copy pattern, got: %q", line)
+			}
+		}
+	})
+
+	t.Run("NonVerboseNoOutput", func(t *testing.T) {
+		// Save original console and restore after test
+		oldConsole := console
+		defer func() { console = oldConsole }()
+
+		cmd := command{copy: true} // Not verbose
+
+		// Create a source file
+		srcFiles := []testFile{{path: ".", filename: "file1.txt", content: "test content", mode: 0644}}
+		_, files := setupTestDirWithFiles(t, srcFiles)
+		srcFile := files[0]
+
+		destDir := t.TempDir()
+
+		var buf bytes.Buffer
+		console.Out = &buf
+		// Run non-verbose copy
+		if err := run(cmd, []string{srcFile, destDir}); err != nil {
+			t.Fatal(err)
+		}
+
+		// Should have no output when not verbose
+		output := strings.TrimSpace(buf.String())
+		if output != "" {
+			t.Errorf("expected no output in non-verbose mode, got: %q", output)
+		}
+
+		// But file should still be copied
+		destFile := filepath.Join(destDir, "file1.txt")
+		if _, err := os.Stat(destFile); os.IsNotExist(err) {
+			t.Error("non-verbose mode should still perform actual copying")
+		}
+	})
 }
 
 type testFile struct {

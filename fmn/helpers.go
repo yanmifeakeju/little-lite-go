@@ -70,3 +70,26 @@ func prompt(dst string) bool {
 	response := strings.ToLower(strings.TrimSpace(scanner.Text()))
 	return response == "y" || response == "yes"
 }
+
+// shouldOverwrite returns true if the file should be overwritten, false if it should be skipped
+// Returns (shouldOverwrite bool, isError bool)
+func shouldOverwrite(targetPath string, targetInfo os.FileInfo, cmd command) (bool, bool) {
+	// If targetInfo is nil, file doesn't exist
+	if targetInfo == nil {
+		return true, false // File doesn't exist, safe to create
+	}
+
+	// File exists - check what to do
+	if !cmd.interactive && !cmd.force {
+		// Neither interactive nor force mode - skip this item
+		errorLogger.Printf("'%s' already exists (use -f to force or -i for interactive)", targetPath)
+		return false, true // Skip and mark as error
+	} else if cmd.interactive && !cmd.force {
+		// Interactive mode - prompt user
+		if !prompt(targetPath) {
+			return false, false // User said no - skip but not an error
+		}
+	}
+	// If force is enabled, we continue and overwrite
+	return true, false
+}

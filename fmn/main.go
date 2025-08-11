@@ -223,20 +223,17 @@ func copyFile(cmd command, directories []string) error {
 				targetPath := filepath.Join(dest, relPath)
 
 				// Check if target already exists
-				_, err = os.Stat(targetPath)
-				if err == nil {
-					// Target exists - check what to do
-					if !cmd.interactive && !cmd.force {
-						// Neither interactive nor force mode - skip this item
-						errorLogger.Printf("'%s' already exists (use -f to force or -i for interactive)", targetPath)
-						return nil // Skip this file/directory and continue to next
-					} else if cmd.interactive && !cmd.force {
-						// Interactive mode - prompt user
-						if !prompt(targetPath) {
-							return nil // User said no - skip this item
-						}
+				targetInfo, err := os.Stat(targetPath)
+				shouldCopy, isError := shouldOverwrite(targetPath, targetInfo, cmd)
+				if !shouldCopy {
+					if isError && err == nil {
+						// File exists but we shouldn't overwrite
+						return nil // Skip this file/directory
+					} else if err != nil && !os.IsNotExist(err) {
+						// Some other error occurred
+						return err
 					}
-					// If force is enabled, we continue and overwrite
+					return nil // User said no or file doesn't exist
 				}
 
 				if d.IsDir() {
@@ -280,7 +277,22 @@ func copyFile(cmd command, directories []string) error {
 					hasErrors = true
 					continue
 				}
+
+				// Check if we should overwrite using existing stat info
+				shouldCopy, isError := shouldOverwrite(finalDest, finalDestInfo, cmd)
+				if !shouldCopy {
+					if isError {
+						hasErrors = true
+					}
+					continue
+				}
+			} else if !os.IsNotExist(err) {
+				// Some other error occurred during stat
+				errorLogger.Printf("Error checking destination '%s': %v", finalDest, err)
+				hasErrors = true
+				continue
 			}
+			// If file doesn't exist (os.IsNotExist), we proceed with copying
 
 			if err := copySrcToDest(srcAbs, finalDest, srcInfo, cmd); err != nil {
 				errorLogger.Printf("%v", err)

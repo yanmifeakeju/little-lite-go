@@ -46,26 +46,32 @@ func main() {
 	// Get remaining args as paths to process (files or directories)
 	dirs := flag.Args()
 
-	if len(dirs) == 0 {
-		dirs = []string{"."} // Default to current directory
-	}
-
 	if err := run(cmd, dirs, os.Stdout); err != nil {
+		flag.Usage()
 		errorLogger.Fatal(err)
 	}
 }
 
 func run(cmd command, directories []string, out io.Writer) error {
 	if cmd.copy {
+		if len(directories) == 0 {
+			return errors.New("copiles requires at least one source path")
+		}
+
 		if len(directories) == 1 {
 			directories = append(directories, ".") // Add default destination
 		}
 
+		fmt.Println(directories)
 		if directories[0] == directories[len(directories)-1] {
 			return errors.New("cannot copy a path to itself") // Quick catch for . . or file to file
 		}
 
 		return copyFile(cmd, directories, out)
+	}
+
+	if len(directories) == 0 {
+		directories = []string{"."} // Default to current directory
 	}
 
 	return listFiles(cmd, directories, out)
@@ -130,9 +136,10 @@ func listFiles(_ command, directories []string, out io.Writer) error {
 // and handles same-file detection and directory validation.
 // Errors are reported to stderr and the function returns an error if any copies fail.
 func copyFile(cmd command, directories []string, out io.Writer) error {
+	// fmt.Println(directories)
 	lastIndex := len(directories) - 1
-	sources := directories[:lastIndex]
 	dest := directories[lastIndex]
+	sources := directories[:lastIndex]
 
 	var hasErrors bool
 

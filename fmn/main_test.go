@@ -55,7 +55,7 @@ func TestListFile(t *testing.T) {
 			var buf bytes.Buffer
 			cmd := command{}
 
-			if err := listFiles(cmd, dirs, &buf); err != nil {
+			if err := run(cmd, dirs, &buf); err != nil {
 				t.Fatal(err)
 			}
 
@@ -125,7 +125,7 @@ func TestListFileSingle(t *testing.T) {
 	cmd := command{}
 
 	// Pass the FILE path, not directory
-	if err := listFiles(cmd, []string{testFilePath}, &buf); err != nil {
+	if err := run(cmd, []string{testFilePath}, &buf); err != nil {
 		t.Fatal(err)
 	}
 
@@ -230,9 +230,8 @@ func TestListFileErrors(t *testing.T) {
 	var buf bytes.Buffer
 	t.Run("NonExistentFile", func(t *testing.T) {
 
-		err := listFiles(command{}, []string{"no-file-like-this.txt"}, &buf)
+		err := run(command{}, []string{"no-file-like-this.txt"}, &buf)
 		if err == nil {
-
 			t.Errorf("expected error but got nil")
 		}
 
@@ -273,7 +272,7 @@ func TestListFileErrors(t *testing.T) {
 		defer os.Chmod(subdir, 0755)
 
 		var buf bytes.Buffer
-		err := listFiles(command{}, []string{subdir}, &buf)
+		err := run(command{}, []string{subdir}, &buf)
 		if err == nil {
 			t.Error("expected error due to permission denied")
 		}
@@ -312,7 +311,7 @@ func TestCopyFile(t *testing.T) {
 		// [source1, source2, ..., destination]
 		directories := []string{srcFilePath, destDir}
 
-		if err := copyFile(cmd, directories, &buf); err != nil {
+		if err := run(cmd, directories, &buf); err != nil {
 			t.Fatal(err)
 		}
 
@@ -380,7 +379,7 @@ func TestCopyFile(t *testing.T) {
 		destDir := t.TempDir()
 		directories = append(directories, destDir)
 
-		if err := copyFile(cmd, directories, &buf); err != nil {
+		if err := run(cmd, directories, &buf); err != nil {
 			t.Fatal(err)
 		}
 
@@ -448,7 +447,7 @@ func TestCopyFile(t *testing.T) {
 		srcDir := filepath.Join(dir, "dir1")
 		destDir := t.TempDir()
 
-		if err := copyFile(cmd, []string{srcDir, destDir}, &buf); err != nil {
+		if err := run(cmd, []string{srcDir, destDir}, &buf); err != nil {
 			t.Fatal(err)
 		}
 
@@ -502,8 +501,351 @@ func TestCopyFile(t *testing.T) {
 		}
 
 	})
-	// t.Run("RecursiveMultipleDirectory", func(t *testing.T) {})
-	// t.Run("ErrorCases", func(t *testing.T) { ... })
+	t.Run("RecursiveMultipleDirectory", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true, recursive: true}
+
+		// Create multiple source directories with nested structure
+		srcFiles1 := []testFile{
+			{path: "dir1", filename: "subdir/file1.txt", content: "content from dir1/subdir", mode: 0644},
+			{path: "dir1", filename: "file2.txt", content: "root file in dir1", mode: 0755},
+			{path: "dir1", filename: "nested/deep/file3.txt", content: "deeply nested file", mode: 0600},
+		}
+
+		srcFiles2 := []testFile{
+			{path: "dir2", filename: "docs/readme.md", content: "documentation content", mode: 0644},
+			{path: "dir2", filename: "scripts/build.sh", content: "#!/bin/bash\necho build", mode: 0755},
+			{path: "dir2", filename: "config.json", content: "{\"version\": \"1.0\"}", mode: 0644},
+		}
+
+		// Setup first source directory
+		baseDir1, _ := setupTestDirWithFiles(t, srcFiles1)
+		srcDir1 := filepath.Join(baseDir1, "dir1")
+
+		// Setup second source directory
+		baseDir2, _ := setupTestDirWithFiles(t, srcFiles2)
+		srcDir2 := filepath.Join(baseDir2, "dir2")
+
+		// Create destination directory
+		destDir := t.TempDir()
+
+		// Copy multiple source directories to single destination
+		// Format: [source1, source2, ..., destination]
+		directories := []string{srcDir1, srcDir2, destDir}
+
+		if err := run(cmd, directories, &buf); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify files from first source directory
+		for _, f := range srcFiles1 {
+			expectedDestFile := filepath.Join(destDir, f.filename)
+			srcFile := filepath.Join(srcDir1, f.filename)
+
+			// Check file exists in destination
+			if _, err := os.Stat(expectedDestFile); os.IsNotExist(err) {
+				t.Fatalf("file from dir1 was not copied: %s", expectedDestFile)
+			}
+
+			// Verify content integrity
+			copiedContent, err := os.ReadFile(expectedDestFile)
+			if err != nil {
+				t.Fatalf("failed to read copied file from dir1: %v", err)
+			}
+			if string(copiedContent) != f.content {
+				t.Errorf("content mismatch for %s: expected %q, got %q",
+					f.filename, f.content, string(copiedContent))
+			}
+
+			// Verify permissions preserved
+			srcInfo, err := os.Stat(srcFile)
+			if err != nil {
+				t.Fatalf("failed to stat source file %s: %v", srcFile, err)
+			}
+			destInfo, err := os.Stat(expectedDestFile)
+			if err != nil {
+				t.Fatalf("failed to stat dest file %s: %v", expectedDestFile, err)
+			}
+
+			if srcInfo.Mode().Perm() != destInfo.Mode().Perm() {
+				t.Errorf("permissions not preserved for %s: source %o, dest %o",
+					f.filename, srcInfo.Mode().Perm(), destInfo.Mode().Perm())
+			}
+		}
+
+		// Verify files from second source directory
+		for _, f := range srcFiles2 {
+			expectedDestFile := filepath.Join(destDir, f.filename)
+			srcFile := filepath.Join(srcDir2, f.filename)
+
+			// Check file exists in destination
+			if _, err := os.Stat(expectedDestFile); os.IsNotExist(err) {
+				t.Fatalf("file from dir2 was not copied: %s", expectedDestFile)
+			}
+
+			// Verify content integrity
+			copiedContent, err := os.ReadFile(expectedDestFile)
+			if err != nil {
+				t.Fatalf("failed to read copied file from dir2: %v", err)
+			}
+			if string(copiedContent) != f.content {
+				t.Errorf("content mismatch for %s: expected %q, got %q",
+					f.filename, f.content, string(copiedContent))
+			}
+
+			// Verify permissions preserved
+			srcInfo, err := os.Stat(srcFile)
+			if err != nil {
+				t.Fatalf("failed to stat source file %s: %v", srcFile, err)
+			}
+			destInfo, err := os.Stat(expectedDestFile)
+			if err != nil {
+				t.Fatalf("failed to stat dest file %s: %v", expectedDestFile, err)
+			}
+
+			if srcInfo.Mode().Perm() != destInfo.Mode().Perm() {
+				t.Errorf("permissions not preserved for %s: source %o, dest %o",
+					f.filename, srcInfo.Mode().Perm(), destInfo.Mode().Perm())
+			}
+		}
+
+		// Verify directory structure is correctly merged
+		// All files should coexist in destination without conflicts
+		expectedFileCount := len(srcFiles1) + len(srcFiles2)
+		actualFiles := 0
+
+		err := filepath.Walk(destDir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+			if !info.IsDir() {
+				actualFiles++
+			}
+			return nil
+		})
+
+		if err != nil {
+			t.Fatalf("failed to walk destination directory: %v", err)
+		}
+
+		if actualFiles != expectedFileCount {
+			t.Errorf("expected %d files in destination, found %d", expectedFileCount, actualFiles)
+		}
+	})
+
+}
+
+func TestCopyFileErrors(t *testing.T) {
+
+	t.Run("NonExistentSourceFile", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true}
+
+		destDir := t.TempDir()
+		nonExistentFile := "/path/that/does/not/exist.txt"
+
+		// Attempt to copy non-existent file
+		err := run(cmd, []string{nonExistentFile, destDir}, &buf)
+		if err == nil {
+			t.Error("expected error when copying non-existent file, got nil")
+		}
+
+		// Should contain helpful error message about source not existing
+		if !strings.Contains(err.Error(), "no such file or directory") &&
+			!strings.Contains(err.Error(), "cannot find") {
+			t.Errorf("expected 'no such file or directory' or 'cannot find' in error, got: %v", err)
+		}
+	})
+
+	t.Run("NonExistentSourceDirectory", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true, recursive: true}
+
+		destDir := t.TempDir()
+		nonExistentDir := "/path/that/does/not/exist/"
+
+		// Attempt to copy non-existent directory recursively
+		err := run(cmd, []string{nonExistentDir, destDir}, &buf)
+		if err == nil {
+			t.Error("expected error when copying non-existent directory, got nil")
+		}
+
+		if !strings.Contains(err.Error(), "no such file or directory") &&
+			!strings.Contains(err.Error(), "cannot find") {
+			t.Errorf("expected path error in message, got: %v", err)
+		}
+	})
+
+	t.Run("InvalidDestinationPath", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true}
+
+		// Create valid source file
+		srcFiles := []testFile{{path: ".", filename: "test.txt", content: "test", mode: 0644}}
+		_, files := setupTestDirWithFiles(t, srcFiles)
+		srcFile := files[0]
+
+		// Use invalid destination (file that cannot be created)
+		invalidDest := "/dev/null/cannot/create/this/path"
+
+		if err := run(cmd, []string{srcFile, invalidDest}, &buf); err == nil {
+			t.Fatalf("Expected error")
+		}
+
+	})
+
+	t.Run("SourceIsDirectory_NonRecursive", func(t *testing.T) {
+		// Save original logger and restore after test
+		oldLogger := errorLogger
+		defer func() { errorLogger = oldLogger }()
+
+		// Capture error messages
+		var errBuf bytes.Buffer
+		errorLogger = log.New(&errBuf, "fmn: ", 0)
+
+		var buf bytes.Buffer
+		cmd := command{copy: true} // Non-recursive
+
+		// Create source directory with files
+		srcFiles := []testFile{{path: "testdir", filename: "file.txt", content: "content", mode: 0644}}
+		baseDir, _ := setupTestDirWithFiles(t, srcFiles)
+		srcDir := filepath.Join(baseDir, "testdir")
+
+		destDir := t.TempDir()
+
+		// Should fail because trying to copy directory without -r flag
+		err := run(cmd, []string{srcDir, destDir}, &buf)
+		if err == nil {
+			t.Error("expected error when copying directory without recursive flag, got nil")
+		}
+
+		// Error should indicate some files could not be copied
+		if !strings.Contains(err.Error(), "some files could not be copied") {
+			t.Errorf("expected 'some files could not be copied' error, got: %v", err)
+		}
+
+		// Check that the specific omission message was logged
+		errOutput := errBuf.String()
+		if !strings.Contains(errOutput, "omitting directory") {
+			t.Errorf("expected 'omitting directory' in error log, got: %q", errOutput)
+		}
+		if !strings.Contains(errOutput, "use -r for recursive") {
+			t.Errorf("expected 'use -r for recursive' in error log, got: %q", errOutput)
+		}
+		if !strings.Contains(errOutput, srcDir) {
+			t.Errorf("expected source directory path in error log, got: %q", errOutput)
+		}
+	})
+
+	t.Run("InsufficientPermissions", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true}
+
+		// Create source file
+		srcFiles := []testFile{{path: ".", filename: "protected.txt", content: "secret content", mode: 0644}}
+		_, files := setupTestDirWithFiles(t, srcFiles)
+		srcFile := files[0]
+
+		// Create destination directory with no write permissions
+		destDir := t.TempDir()
+		protectedDir := filepath.Join(destDir, "protected")
+		if err := os.MkdirAll(protectedDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+
+		// Remove write permission from destination directory
+		if err := os.Chmod(protectedDir, 0555); err != nil {
+			t.Fatal(err)
+		}
+
+		// Restore permissions after test
+		defer os.Chmod(protectedDir, 0755)
+
+		// Try to copy file into protected directory
+		destFile := filepath.Join(protectedDir, "protected.txt")
+		err := copyFile(cmd, []string{srcFile, destFile}, &buf)
+		if err == nil {
+			t.Error("expected error when copying to protected directory, got nil")
+		}
+
+		// Should contain permission-related error
+		errStr := strings.ToLower(err.Error())
+		if !strings.Contains(errStr, "permission") && !strings.Contains(errStr, "denied") {
+			t.Errorf("expected permission error, got: %v", err)
+		}
+	})
+
+	t.Run("TooFewArguments", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true}
+
+		// Test with only one argument (need at least 2: source + dest)
+		err := run(cmd, []string{"onlyfile"}, &buf)
+		if err == nil {
+			t.Error("expected error with too few arguments, got nil")
+		}
+
+		// Test with empty arguments
+		err = run(cmd, []string{}, &buf)
+		if err == nil {
+			t.Error("expected error with no arguments, got nil")
+		}
+
+		if !strings.Contains(err.Error(), "at least one source path") {
+			t.Errorf("expected %s to contain %s", err.Error(), "at least one source path")
+		}
+	})
+
+	t.Run("CopyFileToItself", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true}
+
+		// Create source file
+		srcFiles := []testFile{{path: ".", filename: "selfcopy.txt", content: "content", mode: 0644}}
+		_, files := setupTestDirWithFiles(t, srcFiles)
+		srcFile := files[0]
+
+		// Try to copy file to itself
+		err := run(cmd, []string{srcFile, srcFile}, &buf)
+		if err == nil {
+			t.Error("expected error when copying file to itself, got nil")
+		}
+
+		// Should detect self-copy attempt
+		errStr := strings.ToLower(err.Error())
+		if !strings.Contains(errStr, "cannot copy a path to itself") {
+			t.Errorf("expected self-copy error, got: %v", err)
+		}
+	})
+
+	t.Run("MultipleFilesToNonDirectoryDestination", func(t *testing.T) {
+		var buf bytes.Buffer
+		cmd := command{copy: true}
+
+		// Create multiple source files
+		srcFiles := []testFile{
+			{path: ".", filename: "file1.txt", content: "content1", mode: 0644},
+			{path: ".", filename: "file2.txt", content: "content2", mode: 0644},
+		}
+		_, files := setupTestDirWithFiles(t, srcFiles)
+
+		// Create a regular file as destination (not a directory)
+		destFiles := []testFile{{path: ".", filename: "dest.txt", content: "existing", mode: 0644}}
+		_, destFile := setupTestDirWithFiles(t, destFiles)
+
+		// Try to copy multiple files to a non-directory destination
+		directories := []string{files[0], files[1], destFile[0]}
+		err := run(cmd, directories, &buf)
+		if err == nil {
+			t.Error("expected error when copying multiple files to non-directory destination, got nil")
+		}
+
+		// Should contain error message about target not being a directory
+		if !strings.Contains(err.Error(), "Not a directory") {
+			t.Errorf("expected 'Not a directory' error, got: %v", err)
+		}
+	})
+
 }
 
 type testFile struct {

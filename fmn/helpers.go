@@ -71,25 +71,39 @@ func prompt(dst string) bool {
 	return response == "y" || response == "yes"
 }
 
-// shouldOverwrite returns true if the file should be overwritten, false if it should be skipped
-// Returns (shouldOverwrite bool, isError bool)
-func shouldOverwrite(targetPath string, targetInfo os.FileInfo, cmd command) (bool, bool) {
-	// If targetInfo is nil, file doesn't exist
+// shouldOverwrite determines if a file or directory at targetPath should be overwritten.
+// It returns a boolean indicating if the operation should proceed and an error
+// if the operation should be aborted due to a file conflict.
+func shouldOverwrite(targetPath string, targetInfo os.FileInfo, cmd command) (bool, error) {
+	// If the target path doesn't exist, we can proceed.
 	if targetInfo == nil {
-		return true, false // File doesn't exist, safe to create
+		return true, nil
 	}
 
-	// File exists - check what to do
-	if !cmd.interactive && !cmd.force {
-		// Neither interactive nor force mode - skip this item
-		errorLogger.Printf("'%s' already exists (use -f to force or -i for interactive)", targetPath)
-		return false, true // Skip and mark as error
-	} else if cmd.interactive && !cmd.force {
-		// Interactive mode - prompt user
-		if !prompt(targetPath) {
-			return false, false // User said no - skip but not an error
-		}
+	// If the target is a directory, we don't need to "overwrite" it.
+	// The recursive copy logic will handle creating files/subdirectories inside it.
+	if targetInfo.IsDir() {
+		return true, nil
 	}
-	// If force is enabled, we continue and overwrite
-	return true, false
+
+	// At this point, the target is a file that already exists.
+	// We need to decide whether to overwrite it based on the command flags.
+	if cmd.force {
+		// Force flag is set, so we overwrite.
+		return true, nil
+	}
+
+	if cmd.interactive {
+		// Interactive flag is set, so we ask the user.
+		if prompt(targetPath) {
+			return true, nil // User said yes.
+		}
+		// User said no; skip the file, but it's not an error.
+		return false, nil
+	}
+
+	// Default behavior: file exists, and no -f or -i is provided.
+	// This is an error condition.
+	err := fmt.Errorf("'%s' already exists (use -f to force or -i for interactive)", targetPath)
+	return false, err
 }

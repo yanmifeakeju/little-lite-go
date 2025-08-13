@@ -39,12 +39,34 @@ type command struct {
 }
 
 func main() {
+	// --- Custom Usage Message ---
+	flag.Usage = func() {
+		// Use the standard error output defined in our console struct
+		w := console.Err
+
+		// Program description
+		fmt.Fprintf(w, "fmn is a simple file management tool.\n\n")
+
+		// Usage for the default (list) command
+		fmt.Fprintf(w, "Usage: fmn [options] [path...]\n")
+		fmt.Fprintf(w, "Lists the contents of one or more paths (defaults to current directory).\n\n")
+
+		// Usage for the copy command
+		fmt.Fprintf(w, "Usage: fmn -copy [options] <source> <destination>\n")
+		fmt.Fprintf(w, "       fmn -copy [options] <source...> <directory>\n")
+		fmt.Fprintf(w, "Copies files and directories.\n\n")
+
+		// Print the list of available flags
+		fmt.Fprintf(w, "Options:\n")
+		flag.PrintDefaults()
+	}
+
 	// Copy options
 	copy := flag.Bool("copy", false, "Enable copying")
 	recursive := flag.Bool("r", false, "Copy files recursively")
 	force := flag.Bool("f", false, "Force overwrite of existing files")
 	interactive := flag.Bool("i", false, "Prompt before overwrite")
-	verbose := flag.Bool("v", false, "Show ")
+	verbose := flag.Bool("v", false, "Enable verbose output")
 	dryRun := flag.Bool("dry-run", false, "Show what would be copied without actually copying")
 
 	flag.Parse()
@@ -62,8 +84,8 @@ func main() {
 	dirs := flag.Args()
 
 	if err := run(cmd, dirs); err != nil {
-		flag.Usage()
-		errorLogger.Fatal(err)
+		errorLogger.Println(err)
+		os.Exit(1)
 	}
 }
 
@@ -144,167 +166,150 @@ func listFiles(_ command, directories []string) error {
 	return nil
 }
 
-// copyFile copies files and directories from source(s) to destination.
-// The last argument in directories is treated as the destination, all others as sources.
-// It supports recursive copying with the -r flag, preserves file permissions and timestamps,
-// and handles same-file detection and directory validation.
-// Errors are reported to stderr and the function returns an error if any copies fail.
+// copyFile manages the overall copy operation. It validates the destination,
+// then iterates through the source paths, calling copySource for each one.
+// It collects and returns any errors that occur.
 func copyFile(cmd command, directories []string) error {
-	// fmt.Println(directories)
 	lastIndex := len(directories) - 1
 	dest := directories[lastIndex]
 	sources := directories[:lastIndex]
 
-	var hasErrors bool
-
 	destInfo, err := os.Stat(dest)
 	if err != nil {
-		return err
+		return fmt.Errorf("cannot stat destination '%s': %w", dest, err)
 	}
 
 	if len(sources) > 1 && !destInfo.IsDir() {
-		return fmt.Errorf("target '%s': Not a directory", dest)
+		return fmt.Errorf("target '%s' is not a directory", dest)
 	}
 
-	destAbs, err := filepath.Abs(dest)
+	var errs []error
+	for _, src := range sources {
+		if err := copySource(cmd, src, dest, destInfo); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
+}
+
+// copySource handles the logic for copying a single source path (which can be
+// a file or a directory) to the destination.
+func copySource(cmd command, src, dest string, destInfo os.FileInfo) error {
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("cannot stat source '%s': %w", src, err)
+	}
+
+	if srcInfo.IsDir() {
+		return copyDirectory(cmd, src, dest, destInfo)
+	}
+	return copySingleFile(cmd, src, dest, srcInfo, destInfo)
+}
+
+// copyDirectory handles the logic for recursively copying a directory.
+func copyDirectory(cmd command, src, dest string, destInfo os.FileInfo) error {
+	if !cmd.recursive {
+		return fmt.Errorf("omitting directory '%s' (use -r for recursive)", src)
+	}
+
+	if !destInfo.IsDir() {
+		return fmt.Errorf("cannot overwrite non-directory '%s' with directory '%s'", dest, src)
+	}
+
+	// Walk the source directory
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err // Propagate errors from WalkDir itself
+		}
+
+		// Determine the corresponding path in the destination
+		relPath, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dest, relPath)
+
+		// Nothing to do for the source directory itself
+		if path == src {
+			return nil
+		}
+
+		// Check if we should proceed
+		targetInfo, statErr := os.Stat(targetPath)
+		if statErr != nil && !os.IsNotExist(statErr) {
+			return fmt.Errorf("failed to stat target '%s': %w", targetPath, statErr)
+		}
+
+		should, err := shouldOverwrite(targetPath, targetInfo, cmd)
+		if err != nil {
+			return err
+		}
+		if !should {
+			// If we skip a directory, we must use SkipDir to prevent walking its contents.
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil // Skip file
+		}
+
+		// Perform the copy action
+		if d.IsDir() {
+			return createDir(targetPath, cmd)
+		}
+
+		fileInfo, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return copySrcToDest(path, targetPath, fileInfo, cmd)
+	})
+}
+
+// copySingleFile handles the logic for copying a single file to a destination.
+func copySingleFile(cmd command, src, dest string, srcInfo, destInfo os.FileInfo) error {
+	// Determine the final destination path.
+	finalDest := dest
+	if destInfo.IsDir() {
+		finalDest = filepath.Join(dest, filepath.Base(src))
+	}
+
+	// Check for self-copy.
+	if same, err := isSameFile(src, finalDest); err == nil && same {
+		return fmt.Errorf("cannot copy '%s' to itself", src)
+	}
+
+	// Check if we should overwrite the destination.
+	finalDestInfo, statErr := os.Stat(finalDest)
+	if statErr != nil && !os.IsNotExist(statErr) {
+		return fmt.Errorf("failed to check destination '%s': %w", finalDest, statErr)
+	}
+
+	should, err := shouldOverwrite(finalDest, finalDestInfo, cmd)
 	if err != nil {
 		return err
 	}
-
-	// Pre-validate and collect source info
-	srcInfos := make([]os.FileInfo, len(sources))
-	for i, src := range sources {
-		if src == dest {
-			return fmt.Errorf("cannot copy '%s' to itself", src)
-		}
-
-		srcInfo, err := os.Stat(src)
-		if err != nil {
-			return fmt.Errorf("cannot stat '%s': %w", src, err)
-		}
-
-		if srcInfo.IsDir() && !destInfo.IsDir() {
-			return fmt.Errorf("cannot overwrite non-directory '%s' with directory '%s'", dest, src)
-		}
-
-		srcInfos[i] = srcInfo
+	if !should {
+		return nil // Skip file as requested.
 	}
 
-	for i, src := range sources {
-		srcAbs, err := filepath.Abs(src)
-		if err != nil {
-			errorLogger.Printf("%v", err)
-			hasErrors = true
-			continue
-		}
+	// Perform the actual copy.
+	return copySrcToDest(src, finalDest, srcInfo, cmd)
+}
 
-		srcInfo := srcInfos[i]
-
-		if srcInfo.IsDir() {
-			if !cmd.recursive {
-				errorLogger.Printf("omitting directory '%s' (use -r for recursive)", src)
-				hasErrors = true
-				continue
-			}
-
-			// Recursive directory copying
-			if err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
-				if err != nil {
-					return err
-				}
-
-				// Get relative path from source root to current path
-				relPath, err := filepath.Rel(src, path)
-				if err != nil {
-					return err
-				}
-
-				// Build target path: dest + relative path
-				targetPath := filepath.Join(dest, relPath)
-
-				// Check if target already exists
-				targetInfo, err := os.Stat(targetPath)
-				shouldCopy, isError := shouldOverwrite(targetPath, targetInfo, cmd)
-				if !shouldCopy {
-					if isError && err == nil {
-						// File exists but we shouldn't overwrite
-						return nil // Skip this file/directory
-					} else if err != nil && !os.IsNotExist(err) {
-						// Some other error occurred
-						return err
-					}
-					return nil // User said no or file doesn't exist
-				}
-
-				if d.IsDir() {
-					// Create directory
-					return createDir(targetPath, cmd)
-				} else {
-					// It's a file - ensure parent directory exists first
-					parentDir := filepath.Dir(targetPath)
-					if err := createDir(parentDir, cmd); err != nil {
-						return err
-					}
-
-					// Get file info for copying permissions
-					fileInfo, err := d.Info()
-					if err != nil {
-						return err
-					}
-
-					// Copy the file
-					return copySrcToDest(path, targetPath, fileInfo, cmd)
-				}
-			}); err != nil {
-				errorLogger.Printf("Error copying directory '%s': %v", src, err)
-				hasErrors = true
-				continue
-			}
-
-		} else {
-			// this is a regular file and we can just copy it
-			// after checking if they are the same file
-			var finalDest string
-			if destInfo.IsDir() {
-				finalDest = filepath.Join(destAbs, filepath.Base(srcAbs))
-			} else {
-				finalDest = destAbs
-			}
-
-			if finalDestInfo, err := os.Stat(finalDest); err == nil {
-				if os.SameFile(srcInfo, finalDestInfo) {
-					errorLogger.Printf("'%s' are the same file '%s'", dest, src)
-					hasErrors = true
-					continue
-				}
-
-				// Check if we should overwrite using existing stat info
-				shouldCopy, isError := shouldOverwrite(finalDest, finalDestInfo, cmd)
-				if !shouldCopy {
-					if isError {
-						hasErrors = true
-					}
-					continue
-				}
-			} else if !os.IsNotExist(err) {
-				// Some other error occurred during stat
-				errorLogger.Printf("Error checking destination '%s': %v", finalDest, err)
-				hasErrors = true
-				continue
-			}
-			// If file doesn't exist (os.IsNotExist), we proceed with copying
-
-			if err := copySrcToDest(srcAbs, finalDest, srcInfo, cmd); err != nil {
-				errorLogger.Printf("%v", err)
-				hasErrors = true
-				continue
-			}
-		}
-
+// isSameFile checks if two paths refer to the same underlying file.
+func isSameFile(a, b string) (bool, error) {
+	infoA, err := os.Stat(a)
+	if err != nil {
+		return false, err
 	}
-
-	if hasErrors {
-		return fmt.Errorf("some files could not be copied")
+	infoB, err := os.Stat(b)
+	if err != nil {
+		// If the destination doesn't exist, it can't be the same file.
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
 	}
-	return nil
+	return os.SameFile(infoA, infoB), nil
 }
